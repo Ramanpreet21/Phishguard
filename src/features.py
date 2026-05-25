@@ -45,7 +45,6 @@ try:
 except ImportError:
     _HTML = False
 
-
 # ── Constants ───────────────────────────────────────────────────
 SUSPICIOUS_WORDS = frozenset([
     "login", "signin", "verify", "secure", "update", "account",
@@ -59,6 +58,15 @@ URL_SHORTENERS = frozenset([
     "buff.ly", "adf.ly", "is.gd", "cli.gs", "tr.im", "snipurl.com",
 ])
 
+# Official corporate domains mapped to their legal root infrastructure suffixes
+BRAND_DOMAINS: Dict[str, List[str]] = {
+    "paypal": ["paypal.com", "paypal.co.uk"],
+    "amazon": ["amazon.com", "amazon.co.uk", "amazon.in", "amazon.de"],
+    "google": ["google.com", "google.co.in", "google.ca", "google.ch"],
+    "hdfc": ["hdfcbank.com", "hdfc.co.in", "hdfc.bank.in"],
+    "linkedin": ["linkedin.com"],
+}
+
 # ── URL feature schema (order defines numpy vector) ─────────────
 URL_FEATURE_NAMES: List[str] = [
     "url_length", "domain_length", "path_length",
@@ -67,6 +75,7 @@ URL_FEATURE_NAMES: List[str] = [
     "num_params", "has_https", "has_ip", "has_at_symbol",
     "subdomain_level", "prefix_suffix", "has_shortener",
     "double_slash", "entropy", "path_depth", "has_suspicious_words",
+    "has_brand_impersonation",
 ]
 
 # ── Character vocabulary for DL models ──────────────────────────
@@ -110,6 +119,21 @@ def extract_url_features(url: str) -> Dict[str, Any]:
     except Exception:
         domain = path = scheme = ""
 
+# Brand Impersonation Check Heuristic
+    domain_lower = domain.lower()
+    impersonation_flag = 0
+    
+    for brand, valid_roots in BRAND_DOMAINS.items():
+        if brand in domain_lower:
+            # Check if it fails to end with or neatly transition from an official root domain path
+            is_valid = any(
+                domain_lower.endswith(root) or f"{root}." in domain_lower 
+                for root in valid_roots
+            )
+            if not is_valid:
+                impersonation_flag = 1
+                break
+
     return {
         "url_length":           len(url),
         "domain_length":        len(domain),
@@ -132,6 +156,7 @@ def extract_url_features(url: str) -> Dict[str, Any]:
         "entropy":              round(_entropy(url), 4),
         "path_depth":           path.count("/"),
         "has_suspicious_words": int(any(w in url.lower() for w in SUSPICIOUS_WORDS)),
+        "has_brand_impersonation": impersonation_flag,
     }
 
 
@@ -264,6 +289,23 @@ def get_html_features(url: str, timeout: int = 5) -> Dict[str, Any]:
         pass
     return base
 
+# ────────────────────────────────────────────────────────────────
+# impersonation heuristic feature
+# ────────────────────────────────────────────────────────────────
+
+def check_brand_impersonation(url: str) -> float:
+    url_lower = url.lower()
+    target_brands = ["paypal", "amazon", "google", "hdfc", "linkedin"]
+    
+    for brand in target_brands:
+        # If the brand name is found anywhere in the string
+        if brand in url_lower:
+            # But the domain doesn't end with the legitimate corporate root
+            if not (url_lower.endswith(f"{brand}.com") or f"{brand}.com/" in url_lower or
+                    url_lower.endswith(f"{brand}.co.in") or f"{brand}.co.in/" in url_lower or
+                    url_lower.endswith(f"{brand}.bank.in") or f"{brand}.bank.in/" in url_lower):
+                return 1.0  # High alert: Brand string found on a non-brand host!
+    return 0.0
 
 # ────────────────────────────────────────────────────────────────
 # Aggregated metadata (used by API for rich response)
@@ -281,6 +323,47 @@ def get_metadata(url: str, fetch_html: bool = False) -> Dict[str, Any]:
     if fetch_html:
         meta.update(get_html_features(url))
     return meta
+
+
+# ────────────────────────────────────────────────────────────────
+# Trust-signal aggregation (for conflict arbitration in fusion)
+# ────────────────────────────────────────────────────────────────
+def _is_shortener_domain(domain: str) -> bool:
+    """Exact-match shortener check (avoids substring false positives like reddit.com matching t.co)."""
+    bare = domain.lower().lstrip("www.")
+    return bare in URL_SHORTENERS
+
+
+def get_trust_signals(url: str) -> Dict[str, Any]:
+    """
+    Collect arbitration-relevant signals from existing extractors.
+    Used by the adaptive fusion engine to break ML-vs-DL ties.
+    All sub-calls degrade gracefully if network is unavailable.
+    """
+    url_feats = extract_url_features(url)
+    _url = url if url.startswith(("http://", "https://")) else "http://" + url
+    domain = urlparse(_url).netloc.split(":")[0]
+
+    # Domain trust signals (network calls, each with internal timeouts)
+    age_days = get_domain_age_days(domain)
+    ssl_info = get_ssl_features(domain)
+    dns_info = get_dns_features(domain)
+
+    return {
+        # URL-derived (instant, no network)
+        "brand_impersonation": int(url_feats.get("has_brand_impersonation", 0)),
+        "has_shortener":       int(url_feats.get("has_shortener", 0)),
+        "is_shortener_domain": int(_is_shortener_domain(domain)),  # exact match, not substring
+        "has_ip":              int(url_feats.get("has_ip", 0)),
+        "has_suspicious_words": int(url_feats.get("has_suspicious_words", 0)),
+        "entropy":             float(url_feats.get("entropy", 0.0)),
+        # Network-derived (may be -1 / False on failure)
+        "domain_age_days":     age_days,
+        "ssl_valid":           bool(ssl_info.get("ssl_valid", False)),
+        "ssl_days_left":       int(ssl_info.get("ssl_days_left", -1)),
+        "has_dns":             bool(dns_info.get("has_a", False) or dns_info.get("has_ns", False)),
+        "has_mx":              bool(dns_info.get("has_mx", False)),
+    }
 
 
 # ────────────────────────────────────────────────────────────────
