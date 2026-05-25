@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phishing Detector</title>
+  <style>
+    :root {
+      --bg:       #0f1117;
+      --card:     #1a1d2e;
+      --border:   #2a2d3e;
+      --safe:     #22c55e;
+      --danger:   #ef4444;
+      --warn:     #f59e0b;
+      --accent:   #7c6bff;
+      --text:     #e2e8f0;
+      --muted:    #94a3b8;
+      --radius:   10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 360px;
+      min-height: 200px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      font-size: 13px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header svg { flex-shrink: 0; }
+    .header h1  { font-size: 14px; font-weight: 700; letter-spacing: .4px; }
+
+    /* ── URL bar ── */
+    .url-bar {
+      background: var(--card);
+      margin: 12px 12px 0;
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+    }
+    .url-bar .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+    .url-bar .url   { margin-top: 4px; word-break: break-all; font-size: 11px; color: var(--text); }
+
+    /* ── Verdict card ── */
+    .verdict-card {
+      margin: 10px 12px 0;
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border: 1px solid transparent;
+    }
+    .verdict-card.safe    { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.3); }
+    .verdict-card.danger  { background: rgba(239,68,68,.12);  border-color: rgba(239,68,68,.3); }
+    .verdict-icon { font-size: 28px; flex-shrink: 0; }
+    .verdict-label { font-size: 18px; font-weight: 700; }
+    .verdict-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .confidence-pct { font-size: 22px; font-weight: 800; margin-left: auto; }
+    .confidence-pct.safe   { color: var(--safe); }
+    .confidence-pct.danger { color: var(--danger); }
+
+    /* ── Confidence bar ── */
+    .conf-bar-wrap { margin: 10px 12px 0; }
+    .conf-bar-bg {
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .conf-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width .4s ease;
+    }
+    .conf-bar-fill.safe   { background: var(--safe); }
+    .conf-bar-fill.danger { background: var(--danger); }
+    .conf-bar-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Section ── */
+    .section {
+      margin: 10px 12px 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .section-title {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      padding: 8px 12px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* ── Model votes grid ── */
+    .votes-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+    }
+    .vote-cell {
+      background: var(--card);
+      padding: 8px 6px;
+      text-align: center;
+    }
+    .vote-name  { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .vote-badge {
+      display: inline-block;
+      margin-top: 4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .vote-badge.safe   { background: rgba(34,197,94,.18); color: var(--safe); }
+    .vote-badge.danger { background: rgba(239,68,68,.18);  color: var(--danger); }
+    .vote-conf  { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Feature rows ── */
+    .feature-row {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .feature-row:last-child { border-bottom: none; }
+    .feat-name  { flex: 1; font-size: 11px; }
+    .feat-val   { font-size: 11px; color: var(--muted); min-width: 28px; text-align: right; }
+    .feat-bar-wrap { width: 60px; }
+    .feat-bar-bg   { height: 4px; background: var(--border); border-radius: 2px; }
+    .feat-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+
+    /* ── Metadata ── */
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+    .meta-item {
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+    }
+    .meta-item:nth-child(2n) { border-right: none; }
+    .meta-item:nth-last-child(-n+2) { border-bottom: none; }
+    .meta-key { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .meta-val {
+      margin-top: 3px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .meta-val.ok   { color: var(--safe); }
+    .meta-val.bad  { color: var(--danger); }
+    .meta-val.warn { color: var(--warn); }
+
+    /* ── Loading / error states ── */
+    .state-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      gap: 10px;
+      text-align: center;
+    }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .err-icon { font-size: 28px; }
+    .err-msg  { color: var(--danger); font-size: 12px; }
+
+    /* ── Footer ── */
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px 10px;
+      border-top: 1px solid var(--border);
+      margin-top: 10px;
+    }
+    .footer .latency { font-size: 10px; color: var(--muted); }
+    .footer button {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .footer button:hover { border-color: var(--accent); }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <path d="M12 2L3 7v5c0 5.25 3.75 10.05 9 11.25C17.25 22.05 21 17.25 21 12V7L12 2z"
+          fill="#7c6bff" opacity=".2"/>
+    <path d="M12 2L3 7v5c0 5.25 3.75 10.05 9 11.25C17.25 22.05 21 17.25 21 12V7L12 2z"
+          stroke="#7c6bff" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>
+  <h1>Phishing Detector</h1>
+</div>
+
+<!-- States -->
+<div id="loading-state" class="state-box">
+  <div class="spinner"></div>
+  <div>Analysing URL…</div>
+</div>
+
+<div id="error-state" class="state-box hidden">
+  <div class="err-icon">⚠️</div>
+  <div class="err-msg" id="error-msg">Could not reach the detection API.</div>
+  <div style="font-size:11px;color:var(--muted)">Is the API server running?</div>
+</div>
+
+<!-- Main result (hidden until loaded) -->
+<div id="result" class="hidden">
+
+  <!-- URL bar -->
+  <div class="url-bar">
+    <div class="label">Current URL</div>
+    <div class="url" id="url-display"></div>
+  </div>
+
+  <!-- Verdict -->
+  <div class="verdict-card" id="verdict-card">
+    <div class="verdict-icon" id="verdict-icon"></div>
+    <div>
+      <div class="verdict-label" id="verdict-label"></div>
+      <div class="verdict-sub"  id="verdict-sub"></div>
+    </div>
+    <div class="confidence-pct" id="conf-pct"></div>
+  </div>
+
+  <!-- Confidence bar -->
+  <div class="conf-bar-wrap">
+    <div class="conf-bar-bg">
+      <div class="conf-bar-fill" id="conf-bar"></div>
+    </div>
+    <div class="conf-bar-labels"><span>Safe</span><span>Phishing</span></div>
+  </div>
+
+  <!-- Model votes -->
+  <div class="section" id="votes-section">
+    <div class="section-title">Model Votes</div>
+    <div class="votes-grid" id="votes-grid"></div>
+  </div>
+
+  <!-- Top features -->
+  <div class="section" id="feat-section">
+    <div class="section-title">Top URL Features</div>
+    <div id="feat-list"></div>
+  </div>
+
+  <!-- Metadata: WHOIS / DNS / SSL -->
+  <div class="section" id="meta-section">
+    <div class="section-title">Domain Intelligence</div>
+    <div class="meta-grid" id="meta-grid"></div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span class="latency" id="latency-label"></span>
+    <button id="rescan-btn">↻ Re-scan</button>
+  </div>
+
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

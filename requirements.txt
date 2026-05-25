@@ -1,0 +1,37 @@
+# ── Core ML ────────────────────────────────────────────────────
+scikit-learn==1.4.2
+xgboost==2.0.3
+imbalanced-learn==0.12.3
+joblib==1.4.2
+
+# ── Deep Learning ───────────────────────────────────────────────
+torch==2.3.0
+# CPU-only build — swap for torch==2.3.0+cu121 if you have a GPU
+
+# ── Explainability ──────────────────────────────────────────────
+shap==0.45.1
+
+# ── Data ────────────────────────────────────────────────────────
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.13.1
+
+# ── API ─────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+
+# ── Feature extraction (optional — graceful fallback if absent) ─
+python-whois==0.9.4
+dnspython==2.6.1
+requests==2.32.3
+beautifulsoup4==4.12.3
+lxml==5.2.2
+cryptography==42.0.8
+
+# ── Logging / telemetry ─────────────────────────────────────────
+structlog==24.1.0
+
+# ── Visualisations (train.py only) ──────────────────────────────
+matplotlib==3.9.0
+seaborn==0.13.2

@@ -1,0 +1,35 @@
+# Keep the Docker build context lean
+
+# Dev / IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+**/*.swp
+
+# Datasets (mount at runtime, never bake into image)
+data/
+
+# Logs (mounted as volume)
+logs/
+
+# Training artefacts (mounted as volume, read-only)
+src/models/artifacts/*.pkl
+src/models/artifacts/*.pt
+
+# Test / benchmark
+benchmark.py
+benchmark_report.json
+
+# Docs / visuals
+*.md
+*.png
+*.jpg
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Extension (browser-side only)
+extension/
