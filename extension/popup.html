@@ -6,16 +6,17 @@
   <title>Phishing Detector</title>
   <style>
     :root {
-      --bg:       #0f1117;
-      --card:     #1a1d2e;
-      --border:   #2a2d3e;
-      --safe:     #22c55e;
-      --danger:   #ef4444;
-      --warn:     #f59e0b;
-      --accent:   #7c6bff;
-      --text:     #e2e8f0;
-      --muted:    #94a3b8;
-      --radius:   10px;
+      --bg:         #0f1117;
+      --card:       #1a1d2e;
+      --border:     #2a2d3e;
+      --safe:       #22c55e;
+      --danger:     #ef4444;
+      --suspicious: #f59e0b;
+      --warn:       #f59e0b;
+      --accent:     #7c6bff;
+      --text:       #e2e8f0;
+      --muted:      #94a3b8;
+      --radius:     10px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -60,14 +61,16 @@
       gap: 14px;
       border: 1px solid transparent;
     }
-    .verdict-card.safe    { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.3); }
-    .verdict-card.danger  { background: rgba(239,68,68,.12);  border-color: rgba(239,68,68,.3); }
+    .verdict-card.safe       { background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.3); }
+    .verdict-card.danger     { background: rgba(239,68,68,.12);  border-color: rgba(239,68,68,.3); }
+    .verdict-card.suspicious { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.3); }
     .verdict-icon { font-size: 28px; flex-shrink: 0; }
     .verdict-label { font-size: 18px; font-weight: 700; }
     .verdict-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
     .confidence-pct { font-size: 22px; font-weight: 800; margin-left: auto; }
-    .confidence-pct.safe   { color: var(--safe); }
-    .confidence-pct.danger { color: var(--danger); }
+    .confidence-pct.safe       { color: var(--safe); }
+    .confidence-pct.danger     { color: var(--danger); }
+    .confidence-pct.suspicious { color: var(--suspicious); }
 
     /* ── Confidence bar ── */
     .conf-bar-wrap { margin: 10px 12px 0; }
@@ -82,8 +85,9 @@
       border-radius: 3px;
       transition: width .4s ease;
     }
-    .conf-bar-fill.safe   { background: var(--safe); }
-    .conf-bar-fill.danger { background: var(--danger); }
+    .conf-bar-fill.safe       { background: var(--safe); }
+    .conf-bar-fill.danger     { background: var(--danger); }
+    .conf-bar-fill.suspicious { background: var(--suspicious); }
     .conf-bar-labels {
       display: flex;
       justify-content: space-between;
@@ -131,8 +135,9 @@
       font-size: 10px;
       font-weight: 700;
     }
-    .vote-badge.safe   { background: rgba(34,197,94,.18); color: var(--safe); }
-    .vote-badge.danger { background: rgba(239,68,68,.18);  color: var(--danger); }
+    .vote-badge.safe       { background: rgba(34,197,94,.18); color: var(--safe); }
+    .vote-badge.danger     { background: rgba(239,68,68,.18);  color: var(--danger); }
+    .vote-badge.suspicious { background: rgba(245,158,11,.18); color: var(--suspicious); }
     .vote-conf  { font-size: 10px; color: var(--muted); margin-top: 2px; }
 
     /* ── Feature rows ── */

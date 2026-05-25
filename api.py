@@ -157,16 +157,19 @@ class TopFeature(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    url:         str
-    label:       str
-    is_phishing: bool
-    confidence:  float
-    model_votes: Dict[str, ModelVote]
-    top_features: List[TopFeature]
-    shap_values:  Dict[str, float]
-    metadata:     Dict[str, Any]
-    latency_ms:   float
-    request_id:   str
+    url:                str
+    label:              str                   # "safe" | "suspicious" | "phishing"
+    risk_level:         str                   # "low"  | "medium"     | "high"
+    is_phishing:        bool
+    confidence:         float
+    conflict_detected:  bool
+    arbitration_reason: Optional[str]
+    model_votes:        Dict[str, ModelVote]
+    top_features:       List[TopFeature]
+    shap_values:        Dict[str, float]
+    metadata:           Dict[str, Any]
+    latency_ms:         float
+    request_id:         str
 
 
 # ── Endpoints ────────────────────────────────────────────────────
@@ -244,8 +247,11 @@ async def predict(req: PredictRequest, request: Request):
         return PredictResponse(
             url=req.url,
             label=result["label"],
+            risk_level=result["risk_level"],
             is_phishing=result["is_phishing"],
             confidence=result["confidence"],
+            conflict_detected=result["conflict_detected"],
+            arbitration_reason=result.get("arbitration_reason"),
             model_votes={k: ModelVote(**v) for k, v in result["model_votes"].items()},
             top_features=[TopFeature(**f) for f in result["top_features"]],
             shap_values=result["shap_values"],

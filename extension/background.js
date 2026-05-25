@@ -71,13 +71,19 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 });
 
 function _updateBadge(tabId, data) {
-  const isPhishing = data.is_phishing;
+  const label = data.label || (data.is_phishing ? "phishing" : "safe");
+  const badgeMap = {
+    safe:       { text: "✓", color: "#22c55e" },
+    suspicious: { text: "?", color: "#f59e0b" },
+    phishing:   { text: "⚠", color: "#ef4444" },
+  };
+  const badge = badgeMap[label] || badgeMap.safe;
   chrome.action.setBadgeText({
-    text:  isPhishing ? "⚠" : "✓",
+    text:  badge.text,
     tabId,
   });
   chrome.action.setBadgeBackgroundColor({
-    color: isPhishing ? "#ef4444" : "#22c55e",
+    color: badge.color,
     tabId,
   });
 }

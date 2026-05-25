@@ -23,10 +23,13 @@ function renderResult(data, url) {
   hide("error-state");
   show("result");
 
-  const isPhish = data.is_phishing;
+  const label   = data.label;        // "safe" | "suspicious" | "phishing"
   const conf    = data.confidence;
   const confPct = Math.round(conf * 100);
-  const tone    = isPhish ? "danger" : "safe";
+
+  // Map label → CSS tone class
+  const toneMap = { safe: "safe", suspicious: "suspicious", phishing: "danger" };
+  const tone    = toneMap[label] || "safe";
 
   // URL
   $("url-display").textContent = url.length > 55 ? url.slice(0, 52) + "…" : url;
@@ -34,11 +37,18 @@ function renderResult(data, url) {
   // Verdict card
   const vc = $("verdict-card");
   vc.className = `verdict-card ${tone}`;
-  $("verdict-icon").textContent  = isPhish ? "🚨" : "✅";
-  $("verdict-label").textContent = isPhish ? "Phishing" : "Safe";
-  $("verdict-sub").textContent   = isPhish
-    ? "This page may be attempting to steal credentials."
-    : "No phishing signals detected.";
+
+  const iconMap = { safe: "✅", suspicious: "⚠️", phishing: "🚨" };
+  $("verdict-icon").textContent  = iconMap[label] || "✅";
+  $("verdict-label").textContent = label.charAt(0).toUpperCase() + label.slice(1);
+
+  const subMap = {
+    safe:       "No phishing signals detected.",
+    suspicious: "Proceed with caution — some risk signals found.",
+    phishing:   "This page may be attempting to steal credentials.",
+  };
+  $("verdict-sub").textContent = subMap[label] || "";
+
   const cp = $("conf-pct");
   cp.textContent  = confPct + "%";
   cp.className    = `confidence-pct ${tone}`;
