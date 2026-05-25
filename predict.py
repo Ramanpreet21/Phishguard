@@ -1,18 +1,30 @@
 """
 predict.py
 ==========
-Inference engine.  Loads all 6 trained models once at startup, then
-provides a single predict(url) call that returns:
+Inference engine with **Conflict-Aware Adaptive Fusion**.
+
+Loads all 6 trained models once at startup, then provides a single
+predict(url) call that returns:
 
   {
-    "label":        "phishing" | "safe",
-    "is_phishing":  bool,
-    "confidence":   float,            # fused probability
-    "model_votes":  { model: {label, confidence} },
-    "top_features": [ {feature, value, importance} ],
-    "shap_values":  { feature: shap_value },
-    "latency_ms":   float,
+    "label":              "phishing" | "suspicious" | "safe",
+    "risk_level":         "high" | "medium" | "low",
+    "is_phishing":        bool,
+    "confidence":         float,            # fused probability
+    "conflict_detected":  bool,
+    "arbitration_reason":  str | None,
+    "model_votes":        { model: {label, confidence} },
+    "top_features":       [ {feature, value, importance} ],
+    "shap_values":        { feature: shap_value },
+    "latency_ms":         float,
   }
+
+Fusion Strategy:
+  1. Conflict Detection — measures ML-vs-DL disagreement
+  2. Contextual Arbitration — uses brand impersonation, domain trust,
+     and shortener/IP signals to break ties when models disagree
+  3. Tri-Zone Classification — safe (<0.35) / suspicious (0.35–0.65) /
+     phishing (>0.65)
 
 Usage:
   from predict import PhishingPredictor
@@ -23,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import time
+import math
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
@@ -37,7 +50,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.features import (
     URL_FEATURE_NAMES, url_feature_vector, url_to_ids,
-    VOCAB_SIZE, MAX_URL_LEN,
+    VOCAB_SIZE, MAX_URL_LEN, get_trust_signals,
 )
 from src.models.dl_models import (
     URLLSTMClassifier, URLCNNClassifier, URLTransformerClassifier,
@@ -62,21 +75,21 @@ class PhishingPredictor:
     def _load_models(self):
         log.info("Loading model artifacts…")
 
-        # Scalers
-        self.scaler_arff = joblib.load(ARTIFACTS / "scaler_arff.pkl")
-        self.scaler_csv  = joblib.load(ARTIFACTS / "scaler_csv.pkl")
+        # Unified scaler (trained on 22 URL-derived features)
+        self.scaler = joblib.load(ARTIFACTS / "scaler.pkl")
         self.feature_cols: List[str] = joblib.load(ARTIFACTS / "feature_cols.pkl")
         self.fusion_weights: Dict[str, float] = joblib.load(ARTIFACTS / "fusion_weights.pkl")
 
-        # Sklearn models  (trained on ARFF 30-feature space)
+        # Sklearn models (trained on 22 URL-derived features)
         self.rf  = joblib.load(ARTIFACTS / "rf.pkl")
         self.xgb = joblib.load(ARTIFACTS / "xgb.pkl")
         self.svm = joblib.load(ARTIFACTS / "svm.pkl")
 
-        # PyTorch DL models
-        self.lstm        = self._load_pt(URLLSTMClassifier(),        "lstm.pt")
-        self.cnn         = self._load_pt(URLCNNClassifier(),         "cnn.pt")
-        self.transformer = self._load_pt(URLTransformerClassifier(), "transformer.pt")
+        # PyTorch DL models (multimodal: text + tabular features)
+        n_tab = len(self.feature_cols)
+        self.lstm        = self._load_pt(URLLSTMClassifier(n_tab_features=n_tab),        "lstm.pt")
+        self.cnn         = self._load_pt(URLCNNClassifier(n_tab_features=n_tab),         "cnn.pt")
+        self.transformer = self._load_pt(URLTransformerClassifier(n_tab_features=n_tab), "transformer.pt")
 
         # Map model names → callables
         self._ml_models = {"rf": self.rf, "xgb": self.xgb, "svm": self.svm}
@@ -106,41 +119,13 @@ class PhishingPredictor:
 
     # ── Inference helpers ────────────────────────────────────────
 
-    def _url_to_arff_space(self, url: str) -> np.ndarray:
-        """
-        Map URL-derived features into the ARFF 30-feature space.
-        Features that can be derived from URL are filled; others default to 0.
-        """
-        url_feat = url_feature_vector(url)  # 21-dim
-        arff_vec = np.zeros(len(self.feature_cols), dtype=np.float32)
-        name_set = set(self.feature_cols)
-
-        # Direct name matches
-        for i, name in enumerate(URL_FEATURE_NAMES):
-            if name in name_set:
-                idx = self.feature_cols.index(name)
-                arff_vec[idx] = url_feat[i]
-
-        # ARFF-specific feature heuristics from URL signals
-        mapping = {
-            "having_IP_Address":     url_feat[URL_FEATURE_NAMES.index("has_ip")],
-            "URL_Length":            url_feat[URL_FEATURE_NAMES.index("url_length")],
-            "Shortining_Service":    url_feat[URL_FEATURE_NAMES.index("has_shortener")],
-            "having_At_Symbol":      url_feat[URL_FEATURE_NAMES.index("has_at_symbol")],
-            "double_slash_redirecting": url_feat[URL_FEATURE_NAMES.index("double_slash")],
-            "Prefix_Suffix":         url_feat[URL_FEATURE_NAMES.index("prefix_suffix")],
-            "having_Sub_Domain":     url_feat[URL_FEATURE_NAMES.index("subdomain_level")],
-            "HTTPS_token":           url_feat[URL_FEATURE_NAMES.index("has_https")],
-        }
-        for feat_name, val in mapping.items():
-            if feat_name in name_set:
-                arff_vec[self.feature_cols.index(feat_name)] = val
-
-        return arff_vec
+    def _get_features(self, url: str) -> np.ndarray:
+        """Extract and scale URL features. Returns shape (1, 22) float32."""
+        vec = url_feature_vector(url).reshape(1, -1)
+        return self.scaler.transform(vec).astype(np.float32)
 
     def _ml_predict_proba(self, url: str) -> Dict[str, float]:
-        vec_arff = self._url_to_arff_space(url).reshape(1, -1)
-        vec_sc   = self.scaler_arff.transform(vec_arff)
+        vec_sc = self._get_features(url)
         probs = {}
         for name, clf in self._ml_models.items():
             probs[name] = float(clf.predict_proba(vec_sc)[0, 1])
@@ -148,20 +133,209 @@ class PhishingPredictor:
 
     def _dl_predict_proba(self, url: str) -> Dict[str, float]:
         ids    = torch.tensor(url_to_ids(url), dtype=torch.long).unsqueeze(0).to(self.device)
+        tab    = torch.tensor(self._get_features(url), dtype=torch.float32).to(self.device)
         probs  = {}
         with torch.no_grad():
             for name, model in self._dl_models.items():
-                logit = model(ids)
+                logit = model(ids, tab)
                 probs[name] = float(torch.sigmoid(logit).item())
         return probs
 
-    def _fuse(self, all_probs: Dict[str, float]) -> float:
-        """Weighted average fusion using pre-computed F1 weights."""
-        total_w = sum(self.fusion_weights.get(k, 1.0) for k in all_probs)
+    # ── Conflict-Aware Adaptive Fusion ───────────────────────────
+
+    # Tri-zone thresholds
+    SAFE_CEILING      = 0.35   # below this → safe
+    PHISHING_FLOOR    = 0.65   # above this → phishing
+    # Conflict sensitivity
+    CONFLICT_THRESHOLD = 0.40  # |ML_avg - DL_avg| above this triggers arbitration
+
+    def _weighted_average(self, probs: Dict[str, float]) -> float:
+        """Standard weighted average fusion using pre-computed F1 weights."""
+        total_w = sum(self.fusion_weights.get(k, 1.0) for k in probs)
         fused   = sum(
-            self.fusion_weights.get(k, 1.0) * v for k, v in all_probs.items()
+            self.fusion_weights.get(k, 1.0) * v for k, v in probs.items()
         ) / max(total_w, 1e-9)
         return float(fused)
+
+    def _detect_conflict(self, all_probs: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Measure disagreement between ML (structural) and DL (text) model families.
+
+        Returns:
+          {
+            "conflict":    bool,
+            "score":       float,    # |ML_avg - DL_avg|
+            "ml_avg":      float,
+            "dl_avg":      float,
+            "ml_side":     str,      # "safe" or "phishing"
+            "dl_side":     str,
+          }
+        """
+        ml_keys = [k for k in all_probs if k in self._ml_models]
+        dl_keys = [k for k in all_probs if k in self._dl_models]
+
+        ml_avg = np.mean([all_probs[k] for k in ml_keys]) if ml_keys else 0.5
+        dl_avg = np.mean([all_probs[k] for k in dl_keys]) if dl_keys else 0.5
+        score  = abs(float(ml_avg) - float(dl_avg))
+
+        return {
+            "conflict":  score > self.CONFLICT_THRESHOLD,
+            "score":     round(score, 4),
+            "ml_avg":    round(float(ml_avg), 4),
+            "dl_avg":    round(float(dl_avg), 4),
+            "ml_side":   "phishing" if ml_avg >= 0.5 else "safe",
+            "dl_side":   "phishing" if dl_avg >= 0.5 else "safe",
+        }
+
+    def _contextual_arbitrate(
+        self,
+        all_probs: Dict[str, float],
+        conflict_info: Dict[str, Any],
+        trust_signals: Dict[str, Any],
+    ) -> tuple:
+        """
+        Dynamic Escalation Layer — smooth mathematical fusion.
+
+        Instead of clamping scores to hardcoded values, each rule computes:
+          signal_strength  ∈ [0, 1]  — how strong the ground-truth signal is
+          target           ∈ [0, 1]  — where the signal points
+          base             = weighted average of all models
+
+        Final blend:
+          fused = base + signal_strength × (target − base)
+
+        This preserves natural variation from model outputs while shifting
+        the distribution toward the correct direction.
+
+        Returns:
+          (fused_probability, arbitration_reason)
+        """
+        ml_avg = conflict_info["ml_avg"]
+        dl_avg = conflict_info["dl_avg"]
+        conflict_score = conflict_info["score"]
+        base = self._weighted_average(all_probs)
+
+        # ── Escalation 1: Brand Impersonation ────────────────────
+        # The URL contains a known brand name on a non-official domain.
+        # Escalate toward phishing, proportional to DL confidence.
+        if trust_signals.get("brand_impersonation", 0) == 1:
+            # Signal strength: scale by DL confidence and suspicious-word density
+            sus_words = trust_signals.get("has_suspicious_words", 0)
+            strength = 0.75 + 0.15 * dl_avg + 0.10 * sus_words
+            strength = min(strength, 0.98)
+
+            # Target: DL models' reading + a phishing bias from the signal
+            target = 0.5 + 0.5 * dl_avg   # maps dl_avg ∈ [0,1] → target ∈ [0.5, 1.0]
+
+            fused = base + strength * (target - base)
+            return fused, "brand_impersonation_detected"
+
+        # ── Escalation 2: URL Shortener / Raw IP ─────────────────
+        # Obfuscation signal — shorteners hide the real destination.
+        # Note: uses exact domain match, not substring.
+        if trust_signals.get("is_shortener_domain", 0) == 1 or trust_signals.get("has_ip", 0) == 1:
+            strength = 0.60 + 0.25 * dl_avg   # stronger if DL is also suspicious
+            target   = 0.50 + 0.40 * dl_avg   # target ∈ [0.5, 0.9]
+
+            fused = base + strength * (target - base)
+            reason = "url_shortener_detected" if trust_signals.get("is_shortener_domain") else "raw_ip_detected"
+            return fused, reason
+
+        # ── De-escalation 3: Domain Trust Bundle ─────────────────
+        # Established domain (old, valid SSL, DNS records).
+        # De-escalate toward safe, proportional to trust evidence.
+        age    = trust_signals.get("domain_age_days", -1)
+        ssl_ok = trust_signals.get("ssl_valid", False)
+        dns_ok = trust_signals.get("has_dns", False)
+        mx_ok  = trust_signals.get("has_mx", False)
+
+        # Continuous trust score from 4 boolean signals
+        trust_signals_count = sum([age > 365, ssl_ok, dns_ok, mx_ok])
+        trust_strength = trust_signals_count / 4.0   # ∈ [0, 1]
+
+        # Age bonus: older domains get additional trust weight (log-scaled)
+        if age > 0:
+            age_factor = min(math.log1p(age / 365.0) / 3.0, 0.25)
+            trust_strength = min(trust_strength + age_factor, 1.0)
+
+        if trust_strength >= 0.60:
+            # Target: shift toward ML's lower reading
+            # ML models anchor at their own value, scaled down for safety
+            target = ml_avg * 0.40   # e.g. ML=0.10 → target=0.04; ML=0.40 → target=0.16
+
+            # Strength proportional to trust evidence
+            strength = 0.50 + 0.45 * trust_strength   # ∈ [0.77, 0.95] for trust≥0.60
+
+            fused = base + strength * (target - base)
+            reason = "domain_trust_established" if trust_strength >= 0.75 else "domain_moderately_trusted"
+            return fused, reason
+
+        # ── Escalation 4: Young Domain + Suspicious Text ─────────
+        # New domain combined with text-model alarm.
+        if (0 <= age < 90) and dl_avg > 0.65:
+            # Strength grows with DL confidence and domain youth
+            youth_factor = 1.0 - (age / 90.0)   # ∈ (0, 1] — younger = stronger
+            strength = 0.50 + 0.30 * dl_avg + 0.15 * youth_factor
+            target   = 0.40 + 0.50 * dl_avg   # target ∈ [0.73, 0.90]
+
+            fused = base + strength * (target - base)
+            return fused, "young_domain_suspicious_text"
+
+        # ── No signal: pass through ──────────────────────────────
+        return base, "no_clear_arbitration_signal"
+
+    def _adaptive_fuse(
+        self,
+        all_probs: Dict[str, float],
+        url: str,
+    ) -> Dict[str, Any]:
+        """
+        Three-stage adaptive fusion pipeline:
+          1. Always fetch trust signals (brand impersonation, domain trust)
+          2. Detect conflict between ML and DL model families
+          3. Apply contextual arbitration unconditionally — critical
+             ground-truth signals (brand impersonation, domain trust)
+             override regardless of conflict level
+
+        Returns a dict with fused probability and diagnostic metadata.
+        """
+        conflict_info = self._detect_conflict(all_probs)
+
+        # Always fetch trust signals — they are the ground-truth tiebreakers
+        # that resolve the midline overlap even when models nominally agree
+        trust_signals = get_trust_signals(url)
+
+        if conflict_info["conflict"]:
+            log.info(
+                f"Conflict detected (score={conflict_info['score']:.3f}): "
+                f"ML={conflict_info['ml_side']}({conflict_info['ml_avg']:.3f}) "
+                f"vs DL={conflict_info['dl_side']}({conflict_info['dl_avg']:.3f})"
+            )
+
+        # Always run arbitration — critical signals like brand impersonation
+        # must be checked even when both model families agree in the gray zone
+        fused, reason = self._contextual_arbitrate(
+            all_probs, conflict_info, trust_signals
+        )
+
+        if reason and reason != "no_clear_arbitration_signal":
+            log.info(f"Arbitration applied: {reason} → fused={fused:.4f}")
+        else:
+            # No ground-truth override triggered — use standard fusion
+            fused  = self._weighted_average(all_probs)
+            reason = None
+
+        # Clamp to [0, 1]
+        fused = max(0.0, min(1.0, fused))
+
+        return {
+            "fused_prob":         round(fused, 4),
+            "conflict_detected":  conflict_info["conflict"],
+            "conflict_score":     conflict_info["score"],
+            "arbitration_reason": reason,
+            "ml_avg":             conflict_info["ml_avg"],
+            "dl_avg":             conflict_info["dl_avg"],
+        }
 
     def _shap_explanation(self, url: str) -> Dict[str, float]:
         """
@@ -170,8 +344,7 @@ class PhishingPredictor:
         """
         if self._shap_rf is None:
             return {}
-        vec_arff = self._url_to_arff_space(url).reshape(1, -1)
-        vec_sc   = self.scaler_arff.transform(vec_arff)
+        vec_sc = self._get_features(url)
         try:
             sv = self._shap_rf.shap_values(vec_sc)
             # sv shape: [n_classes, 1, n_features] for RF, or [1, n_features]
@@ -185,15 +358,13 @@ class PhishingPredictor:
 
     def _top_url_features(self, url: str, n: int = 8) -> List[Dict[str, Any]]:
         """Return top-N URL features by RF feature importance."""
-        vec      = url_feature_vector(url)
-        vec_arff = self._url_to_arff_space(url)
+        vec = url_feature_vector(url)
 
         try:
             importances = self.rf.feature_importances_
         except Exception:
             importances = np.zeros(len(self.feature_cols))
 
-        # Build list from URL features (always available)
         items = []
         for i, name in enumerate(URL_FEATURE_NAMES):
             imp = 0.0
@@ -207,6 +378,25 @@ class PhishingPredictor:
         items.sort(key=lambda x: x["importance"], reverse=True)
         return items[:n]
 
+    # ── Tri-zone classification ───────────────────────────────────
+
+    @staticmethod
+    def _classify_tri_zone(prob: float) -> tuple:
+        """
+        Map a fused probability to a three-tier verdict.
+
+        Returns:
+          (label, risk_level)
+          label:      "safe" | "suspicious" | "phishing"
+          risk_level: "low"  | "medium"     | "high"
+        """
+        if prob < PhishingPredictor.SAFE_CEILING:
+            return "safe", "low"
+        elif prob > PhishingPredictor.PHISHING_FLOOR:
+            return "phishing", "high"
+        else:
+            return "suspicious", "medium"
+
     # ── Public API ───────────────────────────────────────────────
 
     def predict(self, url: str, include_shap: bool = True) -> Dict[str, Any]:
@@ -216,8 +406,13 @@ class PhishingPredictor:
         dl_probs  = self._dl_predict_proba(url)
         all_probs = {**ml_probs, **dl_probs}
 
-        fused_prob = self._fuse(all_probs)
-        is_phishing = fused_prob >= 0.5
+        # Adaptive fusion (conflict detection + arbitration)
+        fusion = self._adaptive_fuse(all_probs, url)
+        fused_prob = fusion["fused_prob"]
+
+        # Tri-zone classification
+        label, risk_level = self._classify_tri_zone(fused_prob)
+        is_phishing = label == "phishing"
 
         model_votes = {
             name: {
@@ -232,13 +427,16 @@ class PhishingPredictor:
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
         return {
-            "label":        "phishing" if is_phishing else "safe",
-            "is_phishing":  is_phishing,
-            "confidence":   round(fused_prob, 4),
-            "model_votes":  model_votes,
-            "top_features": top_feats,
-            "shap_values":  shap_vals,
-            "latency_ms":   latency_ms,
+            "label":              label,
+            "risk_level":         risk_level,
+            "is_phishing":        is_phishing,
+            "confidence":         fused_prob,
+            "conflict_detected":  fusion["conflict_detected"],
+            "arbitration_reason": fusion["arbitration_reason"],
+            "model_votes":        model_votes,
+            "top_features":       top_feats,
+            "shap_values":        shap_vals,
+            "latency_ms":         latency_ms,
         }
 
 
