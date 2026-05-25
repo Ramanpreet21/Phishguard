@@ -1,10 +1,16 @@
 """
 src/models/dl_models.py
 =======================
-PyTorch architectures for URL-level phishing detection.
+Multimodal PyTorch architectures for URL-level phishing detection.
 
-All three models accept the same input:
-    x : LongTensor [batch, MAX_URL_LEN]  (character IDs, 0=PAD)
+Each model is a **two-branch network**:
+  Branch 1 (Text):    char_ids   → Embedding → [LSTM / CNN / Transformer] → text_repr
+  Branch 2 (Tabular): url_feats → MLP(22 → 64 → 32)                     → tab_repr
+  Fusion:             concat(text_repr, tab_repr) → FusionHead            → logit
+
+All three models accept the same inputs:
+    x    : LongTensor  [batch, MAX_URL_LEN]    (character IDs, 0=PAD)
+    tab  : FloatTensor [batch, N_TAB_FEATURES] (scaled URL-derived features)
 
 All three output:
     logits : FloatTensor [batch]  (raw scores, apply sigmoid for probability)
@@ -18,24 +24,78 @@ import torch.nn.functional as F
 
 from src.features import VOCAB_SIZE, MAX_URL_LEN
 
+# Default number of tabular features (URL-derived)
+N_TAB_FEATURES = 22
+
 
 # ────────────────────────────────────────────────────────────────
-# Bidirectional LSTM
+# Shared components
+# ────────────────────────────────────────────────────────────────
+
+class TabularBranch(nn.Module):
+    """
+    Small MLP that projects tabular features into a dense representation.
+    30 → 64 → ReLU → Dropout → 32
+    """
+
+    def __init__(self, n_features: int = N_TAB_FEATURES, hidden: int = 64,
+                 out_dim: int = 32, dropout: float = 0.2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_features, hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, out_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, tab: torch.Tensor) -> torch.Tensor:
+        return self.net(tab)                                            # [B, out_dim]
+
+
+class FusionHead(nn.Module):
+    """
+    Classification head that operates on the concatenated text + tabular
+    representations.
+    (text_dim + tab_dim) → 64 → ReLU → Dropout → 1
+    """
+
+    def __init__(self, text_dim: int, tab_dim: int = 32,
+                 hidden: int = 64, dropout: float = 0.3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(text_dim + tab_dim, hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, text_repr: torch.Tensor, tab_repr: torch.Tensor) -> torch.Tensor:
+        fused = torch.cat([text_repr, tab_repr], dim=1)                # [B, T+Tab]
+        return self.net(fused).squeeze(1)                               # [B]
+
+
+# ────────────────────────────────────────────────────────────────
+# Bidirectional LSTM (Multimodal)
 # ────────────────────────────────────────────────────────────────
 
 class URLLSTMClassifier(nn.Module):
     """
-    Char-level bidirectional LSTM.
-    Embeddings → BiLSTM → concat last hidden states → Linear.
+    Char-level bidirectional LSTM + tabular feature fusion.
+    Text:    Embeddings → BiLSTM → concat last hidden states → text_repr [B, 2H]
+    Tabular: URL feats → TabularBranch                       → tab_repr  [B, 32]
+    Fusion:  concat → FusionHead → logit
     """
 
     def __init__(
         self,
-        vocab_size: int   = VOCAB_SIZE,
-        embed_dim:  int   = 64,
-        hidden_dim: int   = 128,
-        num_layers: int   = 2,
-        dropout:    float = 0.3,
+        vocab_size:     int   = VOCAB_SIZE,
+        embed_dim:      int   = 64,
+        hidden_dim:     int   = 128,
+        num_layers:     int   = 2,
+        dropout:        float = 0.3,
+        n_tab_features: int   = N_TAB_FEATURES,
+        tab_out_dim:    int   = 32,
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
@@ -47,35 +107,48 @@ class URLLSTMClassifier(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
         self.drop = nn.Dropout(dropout)
-        self.fc   = nn.Linear(hidden_dim * 2, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        text_dim = hidden_dim * 2   # bidirectional
+        self.tab_branch  = TabularBranch(n_tab_features, out_dim=tab_out_dim, dropout=dropout)
+        self.fusion_head = FusionHead(text_dim, tab_out_dim, dropout=dropout)
+
+    def forward(self, x: torch.Tensor, tab: torch.Tensor) -> torch.Tensor:
+        # Text branch
         emb          = self.drop(self.embedding(x))                     # [B, L, E]
         _, (h, _)    = self.lstm(emb)                                   # h: [2*layers, B, H]
-        # Take last layer forward + backward
         h_fwd = h[-2]   # forward  last layer
         h_bwd = h[-1]   # backward last layer
-        h_cat = torch.cat([h_fwd, h_bwd], dim=1)                       # [B, 2H]
-        return self.fc(self.drop(h_cat)).squeeze(1)                     # [B]
+        text_repr = torch.cat([h_fwd, h_bwd], dim=1)                   # [B, 2H]
+        text_repr = self.drop(text_repr)
+
+        # Tabular branch
+        tab_repr = self.tab_branch(tab)                                 # [B, 32]
+
+        # Fusion
+        return self.fusion_head(text_repr, tab_repr)                    # [B]
 
 
 # ────────────────────────────────────────────────────────────────
-# Character-level CNN  (Kim 2014 multi-kernel style)
+# Character-level CNN (Multimodal)
 # ────────────────────────────────────────────────────────────────
 
 class URLCNNClassifier(nn.Module):
     """
-    Char-level CNN with multiple kernel widths.
-    Embeddings → parallel Conv1d + max-pool → concat → Linear.
+    Char-level CNN with multiple kernel widths + tabular feature fusion.
+    Text:    Embeddings → parallel Conv1d + max-pool → concat → text_repr [B, F*K]
+    Tabular: URL feats → TabularBranch                        → tab_repr  [B, 32]
+    Fusion:  concat → FusionHead → logit
     """
 
     def __init__(
         self,
-        vocab_size:   int       = VOCAB_SIZE,
-        embed_dim:    int       = 64,
-        num_filters:  int       = 128,
-        kernel_sizes: list[int] = (3, 5, 7),
-        dropout:      float     = 0.3,
+        vocab_size:     int       = VOCAB_SIZE,
+        embed_dim:      int       = 64,
+        num_filters:    int       = 128,
+        kernel_sizes:   list[int] = (3, 5, 7),
+        dropout:        float     = 0.3,
+        n_tab_features: int       = N_TAB_FEATURES,
+        tab_out_dim:    int       = 32,
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
@@ -84,23 +157,35 @@ class URLCNNClassifier(nn.Module):
             for k in kernel_sizes
         ])
         self.drop = nn.Dropout(dropout)
-        self.fc   = nn.Linear(num_filters * len(kernel_sizes), 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        text_dim = num_filters * len(kernel_sizes)
+        self.tab_branch  = TabularBranch(n_tab_features, out_dim=tab_out_dim, dropout=dropout)
+        self.fusion_head = FusionHead(text_dim, tab_out_dim, dropout=dropout)
+
+    def forward(self, x: torch.Tensor, tab: torch.Tensor) -> torch.Tensor:
+        # Text branch
         emb     = self.embedding(x).transpose(1, 2)                    # [B, E, L]
         pooled  = [F.relu(conv(emb)).max(dim=2)[0] for conv in self.convs]
-        cat     = torch.cat(pooled, dim=1)                              # [B, F*K]
-        return self.fc(self.drop(cat)).squeeze(1)                       # [B]
+        text_repr = torch.cat(pooled, dim=1)                            # [B, F*K]
+        text_repr = self.drop(text_repr)
+
+        # Tabular branch
+        tab_repr = self.tab_branch(tab)                                 # [B, 32]
+
+        # Fusion
+        return self.fusion_head(text_repr, tab_repr)                    # [B]
 
 
 # ────────────────────────────────────────────────────────────────
-# Transformer encoder
+# Transformer encoder (Multimodal)
 # ────────────────────────────────────────────────────────────────
 
 class URLTransformerClassifier(nn.Module):
     """
-    Char-level Transformer encoder with learned positional embeddings.
-    Masked mean-pooling → Linear classification head.
+    Char-level Transformer encoder + tabular feature fusion.
+    Text:    Embeddings + PosEmb → TransformerEncoder → mean-pool → text_repr [B, E]
+    Tabular: URL feats → TabularBranch                            → tab_repr  [B, 32]
+    Fusion:  concat → FusionHead → logit
     """
 
     def __init__(
@@ -112,6 +197,8 @@ class URLTransformerClassifier(nn.Module):
         ff_dim:         int   = 256,
         dropout:        float = 0.1,
         max_len:        int   = MAX_URL_LEN,
+        n_tab_features: int   = N_TAB_FEATURES,
+        tab_out_dim:    int   = 32,
     ):
         super().__init__()
         self.char_emb = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
@@ -126,9 +213,13 @@ class URLTransformerClassifier(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.drop = nn.Dropout(dropout)
-        self.fc   = nn.Linear(embed_dim, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        text_dim = embed_dim
+        self.tab_branch  = TabularBranch(n_tab_features, out_dim=tab_out_dim, dropout=dropout)
+        self.fusion_head = FusionHead(text_dim, tab_out_dim, dropout=dropout)
+
+    def forward(self, x: torch.Tensor, tab: torch.Tensor) -> torch.Tensor:
+        # Text branch
         B, L     = x.shape
         positions = torch.arange(L, device=x.device).unsqueeze(0)      # [1, L]
         emb      = self.char_emb(x) + self.pos_emb(positions)          # [B, L, E]
@@ -139,23 +230,40 @@ class URLTransformerClassifier(nn.Module):
 
         # Masked mean-pool over non-padding positions
         non_pad  = (~pad_mask).unsqueeze(-1).float()                    # [B, L, 1]
-        pooled   = (out * non_pad).sum(dim=1) / non_pad.sum(dim=1).clamp(min=1e-9)
-        return self.fc(self.drop(pooled)).squeeze(1)                    # [B]
+        text_repr = (out * non_pad).sum(dim=1) / non_pad.sum(dim=1).clamp(min=1e-9)  # [B, E]
+        text_repr = self.drop(text_repr)
+
+        # Tabular branch
+        tab_repr = self.tab_branch(tab)                                 # [B, 32]
+
+        # Fusion
+        return self.fusion_head(text_repr, tab_repr)                    # [B]
 
 
 # ────────────────────────────────────────────────────────────────
-# Dataset helper
+# Dataset helper (multimodal)
 # ────────────────────────────────────────────────────────────────
 
 class URLDataset(torch.utils.data.Dataset):
-    """Simple dataset wrapper for URL char-ID sequences + labels."""
+    """Dataset wrapper for URL char-ID sequences + tabular features + labels."""
 
-    def __init__(self, ids: list[list[int]], labels: list[int]):
-        self.ids    = torch.tensor(ids,    dtype=torch.long)
-        self.labels = torch.tensor(labels, dtype=torch.float32)
+    def __init__(self, ids: list[list[int]], tab_features: list | None = None,
+                 labels: list[int] = None):
+        self.ids    = torch.tensor(ids, dtype=torch.long)
+        self.labels = torch.tensor(labels, dtype=torch.float32) if labels is not None \
+                      else torch.zeros(len(ids), dtype=torch.float32)
+
+        if tab_features is not None:
+            if isinstance(tab_features, torch.Tensor):
+                self.tab = tab_features.float()
+            else:
+                self.tab = torch.tensor(tab_features, dtype=torch.float32)
+        else:
+            # Fallback: zeros (no tabular features available)
+            self.tab = torch.zeros(len(ids), N_TAB_FEATURES, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.labels)
 
     def __getitem__(self, idx: int):
-        return self.ids[idx], self.labels[idx]
+        return self.ids[idx], self.tab[idx], self.labels[idx]
