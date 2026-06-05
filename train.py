@@ -61,6 +61,7 @@ from torch.utils.data import DataLoader
 
 # Project imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import Config
 from src.features import (
     URL_FEATURE_NAMES, extract_url_features, url_to_ids,
     VOCAB_SIZE, MAX_URL_LEN,
@@ -72,7 +73,7 @@ from src.models.dl_models import (
 
 # ── Paths ────────────────────────────────────────────────────────
 ROOT      = Path(__file__).resolve().parent
-ARTIFACTS = ROOT / "src" / "models" / "artifacts"
+ARTIFACTS = Config.ARTIFACTS_DIR
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -219,17 +220,17 @@ def dl_predict_proba(
 # Main training routine
 # ────────────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Train all phishing-detection models")
     parser.add_argument("--features", default="data/extracted_features.parquet",
                         help="Path to pre-extracted features (parquet or CSV)")
     parser.add_argument("--csv",      default="data/phishing_site_urls.csv",
                         help="Path to raw URL CSV (for char tokenization)")
     parser.add_argument("--sample",   type=int, default=50_000)
-    parser.add_argument("--epochs",   type=int, default=10)
-    parser.add_argument("--batch",    type=int, default=256)
-    parser.add_argument("--lr",       type=float, default=3e-4)
-    parser.add_argument("--device",   default="cpu")
+    parser.add_argument("--epochs",   type=int, default=Config.DL_EPOCHS)
+    parser.add_argument("--batch",    type=int, default=Config.DL_BATCH_SIZE)
+    parser.add_argument("--lr",       type=float, default=Config.DL_LEARNING_RATE)
+    parser.add_argument("--device",   default=Config.PREDICTOR_DEVICE)
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -248,7 +249,7 @@ def main():
     (X_tr, X_te, y_tr, y_te,
      urls_tr, urls_te) = train_test_split(
         X_feat, y, urls,
-        test_size=0.2, random_state=42, stratify=y,
+        test_size=0.2, random_state=Config.RANDOM_SEED, stratify=y,
     )
     log.info(f"  Train: {len(X_tr):,}  Test: {len(X_te):,}")
 
@@ -264,16 +265,33 @@ def main():
     # ── 3. Train structured ML models ────────────────────────────
     log.info("[3/4] Training structured ML models (RF / XGB / SVM)…")
 
-    smote = SMOTE(random_state=42)
+    smote = SMOTE(random_state=Config.RANDOM_SEED)
     X_bal, y_bal = smote.fit_resample(X_tr_sc, y_tr)
     log.info(f"  After SMOTE: {Counter(y_bal)}")
 
     ml_results: dict[str, dict] = {}
 
     for name, clf in [
-        ("rf",  RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)),
-        ("xgb", XGBClassifier(n_estimators=200, eval_metric="logloss", verbosity=0, random_state=42)),
-        ("svm", SVC(kernel="rbf", probability=True, C=1.0, random_state=42)),
+        ("rf",  RandomForestClassifier(
+            n_estimators=Config.RF_N_ESTIMATORS,
+            max_depth=Config.RF_MAX_DEPTH,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            n_jobs=-1,
+            random_state=Config.RANDOM_SEED,
+        )),
+        ("xgb", XGBClassifier(
+            n_estimators=Config.XGB_N_ESTIMATORS,
+            eval_metric="logloss",
+            verbosity=0,
+            random_state=Config.RANDOM_SEED,
+        )),
+        ("svm", SVC(
+            kernel="rbf",
+            probability=True,
+            C=Config.SVM_C,
+            random_state=Config.RANDOM_SEED,
+        )),
     ]:
         t0 = time.time()
         clf.fit(X_bal, y_bal)

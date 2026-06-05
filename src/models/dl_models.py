@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from src.features import VOCAB_SIZE, MAX_URL_LEN
 
 # Default number of tabular features (URL-derived)
-N_TAB_FEATURES = 22
+N_TAB_FEATURES = 19
 
 
 # ────────────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ class TabularBranch(nn.Module):
     """
 
     def __init__(self, n_features: int = N_TAB_FEATURES, hidden: int = 64,
-                 out_dim: int = 32, dropout: float = 0.2):
+                 out_dim: int = 32, dropout: float = 0.2) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_features, hidden),
@@ -61,7 +61,7 @@ class FusionHead(nn.Module):
     """
 
     def __init__(self, text_dim: int, tab_dim: int = 32,
-                 hidden: int = 64, dropout: float = 0.3):
+                 hidden: int = 64, dropout: float = 0.3) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(text_dim + tab_dim, hidden),
@@ -96,7 +96,7 @@ class URLLSTMClassifier(nn.Module):
         dropout:        float = 0.3,
         n_tab_features: int   = N_TAB_FEATURES,
         tab_out_dim:    int   = 32,
-    ):
+        ) -> None:
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
         self.lstm = nn.LSTM(
@@ -149,7 +149,7 @@ class URLCNNClassifier(nn.Module):
         dropout:        float     = 0.3,
         n_tab_features: int       = N_TAB_FEATURES,
         tab_out_dim:    int       = 32,
-    ):
+    ) -> None:
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
         self.convs = nn.ModuleList([
@@ -199,7 +199,7 @@ class URLTransformerClassifier(nn.Module):
         max_len:        int   = MAX_URL_LEN,
         n_tab_features: int   = N_TAB_FEATURES,
         tab_out_dim:    int   = 32,
-    ):
+        ) -> None:
         super().__init__()
         self.char_emb = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
         self.pos_emb  = nn.Embedding(max_len, embed_dim)
@@ -248,7 +248,7 @@ class URLDataset(torch.utils.data.Dataset):
     """Dataset wrapper for URL char-ID sequences + tabular features + labels."""
 
     def __init__(self, ids: list[list[int]], tab_features: list | None = None,
-                 labels: list[int] = None):
+                 labels: list[int] | None = None) -> None:
         self.ids    = torch.tensor(ids, dtype=torch.long)
         self.labels = torch.tensor(labels, dtype=torch.float32) if labels is not None \
                       else torch.zeros(len(ids), dtype=torch.float32)

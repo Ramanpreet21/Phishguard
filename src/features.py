@@ -58,6 +58,17 @@ URL_SHORTENERS = frozenset([
     "buff.ly", "adf.ly", "is.gd", "cli.gs", "tr.im", "snipurl.com",
 ])
 
+# ── Pre-compiled regex patterns (vectorised hot-path) ───────────
+_RE_DIGITS = re.compile(r"\d")
+_RE_SUSPICIOUS = re.compile(
+    "|".join(re.escape(w) for w in SUSPICIOUS_WORDS),
+    re.IGNORECASE,
+)
+_RE_SHORTENERS = re.compile(
+    "|".join(re.escape(s) for s in URL_SHORTENERS),
+    re.IGNORECASE,
+)
+
 # Official corporate domains mapped to their legal root infrastructure suffixes
 BRAND_DOMAINS: Dict[str, List[str]] = {
     "paypal": ["paypal.com", "paypal.co.uk"],
@@ -72,10 +83,9 @@ URL_FEATURE_NAMES: List[str] = [
     "url_length", "domain_length", "path_length",
     "num_dots", "num_hyphens", "num_underscores",
     "num_slashes", "num_at", "num_percent", "num_digits",
-    "num_params", "has_https", "has_ip", "has_at_symbol",
-    "subdomain_level", "prefix_suffix", "has_shortener",
-    "double_slash", "entropy", "path_depth", "has_suspicious_words",
-    "has_brand_impersonation",
+    "num_params", "has_ip", "subdomain_level",
+    "prefix_suffix", "has_shortener", "double_slash",
+    "entropy", "path_depth", "has_suspicious_words",
 ]
 
 # ── Character vocabulary for DL models ──────────────────────────
@@ -127,7 +137,7 @@ def extract_url_features(url: str) -> Dict[str, Any]:
         if brand in domain_lower:
             # Check if it fails to end with or neatly transition from an official root domain path
             is_valid = any(
-                domain_lower.endswith(root) or f"{root}." in domain_lower 
+                domain_lower == root or domain_lower.endswith(f".{root}")
                 for root in valid_roots
             )
             if not is_valid:
@@ -144,19 +154,16 @@ def extract_url_features(url: str) -> Dict[str, Any]:
         "num_slashes":          url.count("/"),
         "num_at":               url.count("@"),
         "num_percent":          url.count("%"),
-        "num_digits":           sum(c.isdigit() for c in url),
+        "num_digits":           len(_RE_DIGITS.findall(url)),
         "num_params":           url.count("?") + url.count("=") + url.count("&"),
-        "has_https":            int(scheme == "https"),
         "has_ip":               int(_is_ip(domain)),
-        "has_at_symbol":        int("@" in url),
         "subdomain_level":      max(0, len(domain.split(".")) - 2),
         "prefix_suffix":        int("-" in domain),
-        "has_shortener":        int(any(s in domain for s in URL_SHORTENERS)),
+        "has_shortener":        int(bool(_RE_SHORTENERS.search(domain))),
         "double_slash":         int("//" in url[7:] if len(url) > 7 else False),
         "entropy":              round(_entropy(url), 4),
         "path_depth":           path.count("/"),
-        "has_suspicious_words": int(any(w in url.lower() for w in SUSPICIOUS_WORDS)),
-        "has_brand_impersonation": impersonation_flag,
+        "has_suspicious_words": int(bool(_RE_SUSPICIOUS.search(url))),
     }
 
 
@@ -294,18 +301,11 @@ def get_html_features(url: str, timeout: int = 5) -> Dict[str, Any]:
 # ────────────────────────────────────────────────────────────────
 
 def check_brand_impersonation(url: str) -> float:
-    url_lower = url.lower()
-    target_brands = ["paypal", "amazon", "google", "hdfc", "linkedin"]
-    
-    for brand in target_brands:
-        # If the brand name is found anywhere in the string
-        if brand in url_lower:
-            # But the domain doesn't end with the legitimate corporate root
-            if not (url_lower.endswith(f"{brand}.com") or f"{brand}.com/" in url_lower or
-                    url_lower.endswith(f"{brand}.co.in") or f"{brand}.co.in/" in url_lower or
-                    url_lower.endswith(f"{brand}.bank.in") or f"{brand}.bank.in/" in url_lower):
-                return 1.0  # High alert: Brand string found on a non-brand host!
-    return 0.0
+    """Check for brand impersonation by delegating to the URL feature extractor.
+
+    Returns 1.0 if a brand name appears on a non-official domain, else 0.0.
+    """
+    return float(extract_url_features(url).get("has_brand_impersonation", 0))
 
 # ────────────────────────────────────────────────────────────────
 # Aggregated metadata (used by API for rich response)

@@ -33,6 +33,7 @@ import pandas as pd
 
 # Project imports
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import Config
 from src.features import URL_FEATURE_NAMES, extract_url_features
 
 logging.basicConfig(
@@ -61,9 +62,9 @@ def main():
                         help="Path to raw URL dataset")
     parser.add_argument("--out", default="data/extracted_features",
                         help="Output path prefix (without extension)")
-    parser.add_argument("--workers", type=int, default=4,
+    parser.add_argument("--workers", type=int, default=Config.EXTRACTION_WORKERS,
                         help="Number of parallel workers")
-    parser.add_argument("--batch-size", type=int, default=5000,
+    parser.add_argument("--batch-size", type=int, default=Config.EXTRACTION_BATCH_SIZE,
                         help="URLs per worker batch")
     args = parser.parse_args()
 

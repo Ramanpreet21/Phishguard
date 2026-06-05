@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 # Project imports
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import Config
 from predict import PhishingPredictor
 
 # ── Structured logging setup ─────────────────────────────────────
@@ -51,7 +52,7 @@ structlog.configure(
 )
 slog = structlog.get_logger()
 
-LOGS_DIR = Path(__file__).resolve().parent / "logs"
+LOGS_DIR = Config.LOGS_DIR
 LOGS_DIR.mkdir(exist_ok=True)
 
 _REQUEST_LOG    = LOGS_DIR / "requests.jsonl"
@@ -280,4 +281,4 @@ async def predict(req: PredictRequest, request: Request):
 # ── Dev run ──────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api:app", host=Config.API_HOST, port=Config.API_PORT, reload=True)

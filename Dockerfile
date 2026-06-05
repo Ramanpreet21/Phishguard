@@ -29,6 +29,8 @@ COPY --from=builder /install /usr/local
 COPY src/      ./src/
 COPY api.py    .
 COPY predict.py .
+COPY config.py .
+COPY .env.example .env
 
 # Logs and model artifacts directories
 RUN mkdir -p logs src/models/artifacts

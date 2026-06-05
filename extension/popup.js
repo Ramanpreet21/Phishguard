@@ -61,7 +61,7 @@ function renderResult(data, url) {
   // ── Model votes ──────────────────────────────────────────────
   const grid = $("votes-grid");
   grid.innerHTML = "";
-  const MODEL_LABELS = { rf:"RF", xgb:"XGB", svm:"SVM", lstm:"LSTM", cnn:"CNN", transformer:"Tfmr" };
+  const MODEL_LABELS = PHISHGUARD_CONFIG.MODEL_LABELS;
   for (const [key, vote] of Object.entries(data.model_votes || {})) {
     const t   = vote.label === "phishing" ? "danger" : "safe";
     const pct = Math.round(vote.confidence * 100);
@@ -156,30 +156,18 @@ async function runScan() {
   hide("result");
   hide("error-state");
 
-  let tabUrl;
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    tabUrl = tab?.url;
-    if (!tabUrl || (!tabUrl.startsWith("http://") && !tabUrl.startsWith("https://"))) {
-      renderError("No scannable URL on this page.");
-      return;
-    }
-  } catch (e) {
-    renderError("Could not read the current tab URL.");
+  const tabUrl = await getActiveTabUrl();
+  if (!tabUrl) {
+    renderError("No scannable URL on this page.");
     return;
   }
 
-  chrome.runtime.sendMessage({ type: "PREDICT", url: tabUrl }, response => {
-    if (chrome.runtime.lastError) {
-      renderError("Background service unavailable: " + chrome.runtime.lastError.message);
-      return;
-    }
-    if (!response?.ok) {
-      renderError(response?.error || "Unknown API error.");
-      return;
-    }
-    renderResult(response.data, tabUrl);
-  });
+  const response = await requestPrediction(tabUrl);
+  if (!response.ok) {
+    renderError(response.error || "Unknown API error.");
+    return;
+  }
+  renderResult(response.data, tabUrl);
 }
 
 // ── Init ─────────────────────────────────────────────────────────

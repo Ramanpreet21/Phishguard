@@ -48,6 +48,7 @@ import shap
 # Project imports
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import Config
 from src.features import (
     URL_FEATURE_NAMES, url_feature_vector, url_to_ids,
     VOCAB_SIZE, MAX_URL_LEN, get_trust_signals,
@@ -58,13 +59,13 @@ from src.models.dl_models import (
 
 log = logging.getLogger(__name__)
 
-ARTIFACTS = Path(__file__).resolve().parent / "src" / "models" / "artifacts"
+ARTIFACTS = Config.ARTIFACTS_DIR
 
 
 class PhishingPredictor:
     """Thread-safe predictor.  Instantiate once, call predict() many times."""
 
-    def __init__(self, device: str = "cpu"):
+    def __init__(self, device: str = "cpu") -> None:
         self.device = torch.device(device)
         self._load_models()
         self._build_shap_explainers()
@@ -72,7 +73,7 @@ class PhishingPredictor:
 
     # ── Loading ─────────────────────────────────────────────────
 
-    def _load_models(self):
+    def _load_models(self) -> None:
         log.info("Loading model artifacts…")
 
         # Unified scaler (trained on 22 URL-derived features)
@@ -105,7 +106,7 @@ class PhishingPredictor:
         arch.eval()
         return arch
 
-    def _build_shap_explainers(self):
+    def _build_shap_explainers(self) -> None:
         """Build SHAP explainers for tree-based models."""
         # Use a small background sample (all zeros is a valid baseline for URL features)
         bg = np.zeros((1, len(URL_FEATURE_NAMES)), dtype=np.float32)
@@ -143,11 +144,11 @@ class PhishingPredictor:
 
     # ── Conflict-Aware Adaptive Fusion ───────────────────────────
 
-    # Tri-zone thresholds
-    SAFE_CEILING      = 0.35   # below this → safe
-    PHISHING_FLOOR    = 0.65   # above this → phishing
+    # Tri-zone thresholds (from centralised config)
+    SAFE_CEILING      = Config.SAFE_CEILING
+    PHISHING_FLOOR    = Config.PHISHING_FLOOR
     # Conflict sensitivity
-    CONFLICT_THRESHOLD = 0.40  # |ML_avg - DL_avg| above this triggers arbitration
+    CONFLICT_THRESHOLD = Config.CONFLICT_THRESHOLD
 
     def _weighted_average(self, probs: Dict[str, float]) -> float:
         """Standard weighted average fusion using pre-computed F1 weights."""
@@ -192,7 +193,7 @@ class PhishingPredictor:
         all_probs: Dict[str, float],
         conflict_info: Dict[str, Any],
         trust_signals: Dict[str, Any],
-    ) -> tuple:
+    ) -> tuple[float, str | None]:
         """
         Dynamic Escalation Layer — smooth mathematical fusion.
 

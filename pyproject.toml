@@ -1,0 +1,68 @@
+[project]
+name = "phishguard"
+version = "1.0.0"
+description = "Six-model ensemble phishing detection with conflict-aware adaptive fusion"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # ── Formatting conflicts (handled by formatter) ──
+    "W191",   # indentation contains tabs
+    "E111",   # indentation is not a multiple of X
+    "E114",   # indentation is not a multiple of X (comment)
+    "E117",   # over-indented
+    "D206",   # docstring should be indented with spaces
+    "D300",   # use triple double quotes
+    "Q000",   # single quotes found but double quotes preferred
+    "Q001",   # single quote multiline found
+    "Q002",   # single quote docstring found
+    "Q003",   # change outer quotes to avoid escaping
+    "COM812", # trailing comma missing
+    "COM819", # trailing comma prohibited
+    "ISC001", # single line implicit string concatenation
+    "ISC002", # multi line implicit string concatenation
+    
+    # ── Docstring style conflicts ──
+    "D203",   # one-blank-line-before-class (conflicts with D211)
+    "D213",   # multi-line-docstring-summary-should-start-at-second-line (conflicts with D212)
+    
+    # ── Too strict for this project ──
+    "ANN101", # missing type annotation for self
+    "ANN102", # missing type annotation for cls
+    "ANN401", # dynamically typed expressions (typing.Any) disallowed
+    "S101",   # use of assert
+    "T201",   # print found
+    "FBT001", # boolean positional arg in function definition
+    "FBT002", # boolean default in function definition
+    "ERA001", # found commented-out code
+    "PLR0913",# too many arguments to function call
+    "PLR2004",# magic value used in comparison
+    "TD002",  # missing author in TODO
+    "TD003",  # missing issue link in TODO
+    "FIX002", # line contains TODO
+    "INP001", # implicit namespace package (no __init__.py)
+    "TRY003", # avoid specifying long messages outside the exception class
+    "EM101",  # exception must not use a string literal
+    "EM102",  # exception must not use an f-string literal
+    "G004",   # logging statement uses f-string
+    "D100",   # missing docstring in public module
+    "D104",   # missing docstring in public package
+]
+
+[tool.ruff.lint.per-file-ignores]
+"train.py" = ["D103"]        # allow missing docstrings in training script functions
+"benchmark.py" = ["D103", "S310"]  # allow missing docstrings + urlopen
+"adversarial_eval.py" = ["D103"]
+"validate_fusion.py" = ["D103"]
+"analyze_features.py" = ["D103"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "config"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

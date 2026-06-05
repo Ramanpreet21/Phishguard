@@ -1,8 +1,7 @@
+importScripts('config.js');
+
 // background.js  — Manifest V3 Service Worker
 // Listens for popup requests, calls /predict, caches results.
-
-const API_BASE = "http://localhost:8000";   // ← change for production
-const CACHE_TTL_MS = 5 * 60 * 1000;        // 5 minutes
 
 // ── In-memory cache (survives until SW dies) ─────────────────────
 const _cache = new Map();
@@ -20,11 +19,11 @@ async function queryAPI(url) {
   const key   = _cacheKey(url);
   const now   = Date.now();
   const entry = _cache.get(key);
-  if (entry && now - entry.ts < CACHE_TTL_MS) {
+  if (entry && now - entry.ts < PHISHGUARD_CONFIG.CACHE_TTL_MS) {
     return { ...entry.data, cached: true };
   }
 
-  const resp = await fetch(`${API_BASE}/predict`, {
+  const resp = await fetch(`${PHISHGUARD_CONFIG.API_BASE}/predict`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({
@@ -64,7 +63,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
     }
     const key   = _cacheKey(tab.url);
     const entry = _cache.get(key);
-    if (entry && Date.now() - entry.ts < CACHE_TTL_MS) {
+    if (entry && Date.now() - entry.ts < PHISHGUARD_CONFIG.CACHE_TTL_MS) {
       _updateBadge(tabId, entry.data);
     }
   });
@@ -72,12 +71,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 
 function _updateBadge(tabId, data) {
   const label = data.label || (data.is_phishing ? "phishing" : "safe");
-  const badgeMap = {
-    safe:       { text: "✓", color: "#22c55e" },
-    suspicious: { text: "?", color: "#f59e0b" },
-    phishing:   { text: "⚠", color: "#ef4444" },
-  };
-  const badge = badgeMap[label] || badgeMap.safe;
+  const badge = PHISHGUARD_CONFIG.BADGE_MAP[label] || PHISHGUARD_CONFIG.BADGE_MAP.safe;
   chrome.action.setBadgeText({
     text:  badge.text,
     tabId,

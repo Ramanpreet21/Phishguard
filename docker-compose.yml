@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile
     image: phishing-detector:latest
     container_name: phishing-api
+    env_file: .env
     ports:
       - "8000:8000"
     environment:
@@ -17,6 +18,8 @@ services:
       - ./src/models/artifacts:/app/src/models/artifacts:ro
       # Persist request + prediction logs
       - ./logs:/app/logs
+      # Environment overrides
+      - ./.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
       test:     ["CMD", "curl", "-f", "http://localhost:8000/health"]
