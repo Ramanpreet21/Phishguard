@@ -136,6 +136,7 @@ class PredictRequest(BaseModel):
     url:          str  = Field(..., description="URL to classify")
     include_shap: bool = Field(True, description="Include SHAP values in response")
     fetch_html:   bool = Field(False, description="Fetch page HTML for extra metadata (slower)")
+    screenshot_b64: Optional[str] = Field(None, description="Base64 encoded JPEG screenshot of the page")
 
     @field_validator("url")
     @classmethod
@@ -214,7 +215,7 @@ async def predict(req: PredictRequest, request: Request):
 
     try:
         t0     = time.perf_counter()
-        result = predictor.predict(req.url, include_shap=req.include_shap)
+        result = predictor.predict(req.url, include_shap=req.include_shap, screenshot_b64=req.screenshot_b64)
 
         # Optional metadata (WHOIS / DNS / SSL)
         meta: Dict[str, Any] = {}

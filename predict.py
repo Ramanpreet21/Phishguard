@@ -54,8 +54,12 @@ from src.features import (
     VOCAB_SIZE, MAX_URL_LEN, get_trust_signals,
 )
 from src.models.dl_models import (
-    URLLSTMClassifier, URLCNNClassifier, URLTransformerClassifier,
+    URLLSTMClassifier, URLCNNClassifier, URLTransformerClassifier, PhishingVisualCNN
 )
+import base64
+from io import BytesIO
+from PIL import Image
+import torchvision.transforms as transforms
 
 log = logging.getLogger(__name__)
 
@@ -100,8 +104,19 @@ class PhishingPredictor:
             "transformer": self.transformer,
         }
 
+        # Visual CNN Model
+        self.visual_cnn = PhishingVisualCNN(pretrained=True).to(self.device)
+        try:
+            self.visual_cnn.load_state_dict(torch.load(ARTIFACTS / "visual_cnn.pt", map_location=self.device))
+        except FileNotFoundError:
+            log.warning("visual_cnn.pt not found. Using untrained/ImageNet weights for visual fallback.")
+        self.visual_cnn.eval()
+
     def _load_pt(self, arch: torch.nn.Module, filename: str) -> torch.nn.Module:
-        arch.load_state_dict(torch.load(ARTIFACTS / filename, map_location=self.device))
+        try:
+            arch.load_state_dict(torch.load(ARTIFACTS / filename, map_location=self.device))
+        except FileNotFoundError:
+            log.warning(f"{filename} not found.")
         arch.to(self.device)
         arch.eval()
         return arch
@@ -141,6 +156,31 @@ class PhishingPredictor:
                 logit = model(ids, tab)
                 probs[name] = float(torch.sigmoid(logit).item())
         return probs
+
+    def _visual_predict_proba(self, screenshot_b64: str | None) -> Dict[str, float]:
+        if not screenshot_b64:
+            return {}
+        try:
+            # Strip data URI prefix if present
+            if "," in screenshot_b64:
+                screenshot_b64 = screenshot_b64.split(",")[1]
+            img_bytes = base64.b64decode(screenshot_b64)
+            img = Image.open(BytesIO(img_bytes)).convert("RGB")
+            
+            transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+            tensor = transform(img).unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                logit = self.visual_cnn(tensor)
+                prob = float(torch.sigmoid(logit).item())
+            return {"visual_cnn": prob}
+        except Exception as e:
+            log.error(f"Visual prediction failed: {e}")
+            return {}
 
     # ── Conflict-Aware Adaptive Fusion ───────────────────────────
 
@@ -282,6 +322,18 @@ class PhishingPredictor:
             fused = base + strength * (target - base)
             return fused, "young_domain_suspicious_text"
 
+        # ── Escalation 5: Visual/CNN Phishing Override ───────────
+        # Zero-text evasion: URL looks benign, but visual model strongly 
+        # detects a phishing/login screenshot.
+        visual_prob = all_probs.get("visual_cnn", 0.0)
+        if visual_prob > 0.90 and ml_avg < 0.40:
+            # Tabular models think it's safe, but CNN is screaming phishing.
+            # This triggers the Fusion layer block.
+            strength = 0.85
+            target   = 0.95
+            fused = base + strength * (target - base)
+            return fused, "visual_cnn_phishing_override"
+
         # ── No signal: pass through ──────────────────────────────
         return base, "no_clear_arbitration_signal"
 
@@ -400,12 +452,13 @@ class PhishingPredictor:
 
     # ── Public API ───────────────────────────────────────────────
 
-    def predict(self, url: str, include_shap: bool = True) -> Dict[str, Any]:
+    def predict(self, url: str, include_shap: bool = True, screenshot_b64: str | None = None) -> Dict[str, Any]:
         t0 = time.perf_counter()
 
         ml_probs  = self._ml_predict_proba(url)
         dl_probs  = self._dl_predict_proba(url)
-        all_probs = {**ml_probs, **dl_probs}
+        vis_probs = self._visual_predict_proba(screenshot_b64)
+        all_probs = {**ml_probs, **dl_probs, **vis_probs}
 
         # Adaptive fusion (conflict detection + arbitration)
         fusion = self._adaptive_fuse(all_probs, url)

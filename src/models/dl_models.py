@@ -267,3 +267,33 @@ class URLDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int):
         return self.ids[idx], self.tab[idx], self.labels[idx]
+
+# ────────────────────────────────────────────────────────────────
+# Visual Similarity CNN (Screenshot analysis)
+# ────────────────────────────────────────────────────────────────
+import torchvision.models as models
+
+class PhishingVisualCNN(nn.Module):
+    """
+    Lightweight MobileNetV3 CNN for analyzing screenshots of rendered pages.
+    Detects visual zero-text phishing (e.g., login forms rendered as images).
+    """
+
+    def __init__(self, pretrained: bool = True) -> None:
+        super().__init__()
+        # Use MobileNetV3 small for fast inference in the background
+        # Weights default to IMAGENET1K_V1 if pretrained=True, but we handle deprecated warnings
+        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        self.mobilenet = models.mobilenet_v3_small(weights=weights)
+        
+        # Replace the classifier head with a binary output (safe vs phishing)
+        in_features = self.mobilenet.classifier[3].in_features
+        self.mobilenet.classifier[3] = nn.Linear(in_features, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: FloatTensor [batch, 3, 224, 224] (normalized screenshot)
+        Returns: logits [batch]
+        """
+        return self.mobilenet(x).squeeze(1)
+
