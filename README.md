@@ -1,6 +1,6 @@
 # 🛡️ Phishing Detection System
 
-**Group 32 · Dept. of AI & Emerging Technologies**
+**Dept. of AI & Emerging Technologies**
 
 Six-model ensemble (3 classical ML + 3 deep learning) served via FastAPI,
 packaged in Docker, with a Chrome extension for real-time tab analysis.
@@ -204,6 +204,8 @@ docker compose logs -f api
   "request_id":   "a1b2c3d4"
 }
 ```
+<img width="1274" height="949" alt="response" src="https://github.com/user-attachments/assets/35467929-9977-4600-8626-0612f79dbed9" />
+
 
 ---
 
@@ -214,6 +216,9 @@ docker compose logs -f api
 3. Click **Load unpacked** → select the `extension/` folder
 4. Add icons to `extension/icons/` (icon16/48/128.png)
 5. Change `API_BASE` in `background.js` to match your server
+
+**Chrome Extention Interface**
+<img width="289" height="464" alt="phishguard_extention" src="https://github.com/user-attachments/assets/95134fd2-1db8-4f9f-b71c-22bec9deed25" />
 
 
 Live feed alternatives: [OpenPhish](https://openphish.com) · [PhishTank](https://phishtank.org)
