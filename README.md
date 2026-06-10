@@ -217,7 +217,9 @@ docker compose logs -f api
 4. Add icons to `extension/icons/` (icon16/48/128.png)
 5. Change `API_BASE` in `background.js` to match your server
 
-**Chrome Extention Interface**
+## Chrome Extention Interface
+
+
 <img width="289" height="464" alt="phishguard_extention" src="https://github.com/user-attachments/assets/95134fd2-1db8-4f9f-b71c-22bec9deed25" />
 
 
